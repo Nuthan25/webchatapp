@@ -1,0 +1,117 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: AWS CloudFormation Template for deploying WebSocket API, Lambda functions, and S3 bucket with permissions
+
+Globals:
+  Function:
+    Timeout: 3
+    MemorySize: 128
+    Tracing: Active
+
+Resources:
+  WebSocketAPI:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: MyWebSocketAPI
+      ProtocolType: WEBSOCKET
+      RouteSelectionExpression: $request.body.action
+
+  ConnectLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: ConnectLambdaFunction
+      CodeUri: webconnect/
+      Runtime: python3.11
+      Handler: app.lambda_handler
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - lambda:InvokeFunction
+              Resource: "*"
+
+
+  SendMessageLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: SendMessageLambdaFunction
+      CodeUri: webmessage/
+      Runtime: python3.11
+      Handler: app.lambda_handler
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - lambda:InvokeFunction
+              Resource: "*"
+
+  ConnectIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref WebSocketAPI
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2021-08-06/functions/${ConnectLambda.Arn}/invocations
+      PayloadFormatVersion: "2.0"
+
+  SendMessageIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref WebSocketAPI
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2021-08-06/functions/${SendMessageLambda.Arn}/invocations
+      PayloadFormatVersion: "2.0"
+
+  ConnectLambdaRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WebSocketAPI
+      RouteKey: $connect
+      AuthorizationType: NONE
+      Target: !Sub integrations/${ConnectIntegration.Id}/invocations
+      OperationName: ConnectLambdaOperation
+      AuthorizationScopes:
+        - !Ref WebSocketAPI.Auth
+      RouteResponseSelectionExpression: $default
+      AuthorizerId: !Ref WebSocketAPI.Auth
+      RequestModels:
+        "application/json": !Ref WebSocketAPI.RequestModel
+      ModelSelectionExpression: $request.body.action
+
+  SendMessageLambdaRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WebSocketAPI
+      RouteKey: sendmessage
+      AuthorizationType: NONE
+      Target: !Sub integrations/${SendMessageIntegration.Id}/invocations
+      OperationName: SendMessageLambdaOperation
+      AuthorizationScopes:
+        - !Ref WebSocketAPI.Auth
+      RouteResponseSelectionExpression: $default
+      AuthorizerId: !Ref WebSocketAPI.Auth
+      RequestModels:
+        "application/json": !Ref WebSocketAPI.RequestModel
+      ModelSelectionExpression: $request.body.action
+
+  MyS3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: my-websocket-s3-bucket
+
+  S3ReadWritePolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:PutObject
+            Resource: !Sub arn:aws:s3:::my-websocket-s3-bucket/*
+      Groups:
+        - !Ref DemoGroup
+    DependsOn: DemoGroup
+
+  DemoGroup:
+    Type: AWS::IAM::Group
